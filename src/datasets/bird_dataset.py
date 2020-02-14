@@ -5,8 +5,6 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 
-import transforms as T
-
 RootDir = Path("/media/data1/mx_dataset")
 
 class BirdDataset(Dataset):
@@ -32,8 +30,15 @@ class BirdDataset(Dataset):
         with open(self.record_path) as f:
             self.records = [json.loads(l.strip().replace("\'", "\"")) for l in f.readlines()]
 
-        if self.name == 'synthesized' and small_set:
+        if self.name == 'synthesized' and self.small_set and self.train:
             self.records = self.records[:1000]
+
+        records = []
+        for r in self.records:
+            labels = torch.as_tensor(r['list_label_index'], dtype=torch.int64)
+            if len(labels[labels <= 3]) > 0:
+                records.append(r)
+        self.records = records
         
     def __getitem__(self, idx):
         record = self.records[idx]

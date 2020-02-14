@@ -5,14 +5,14 @@ import torch
 
 import torchvision.models.detection.mask_rcnn
 
-from coco_utils import get_coco_api_from_dataset
-from coco_eval import CocoEvaluator
-import utils
+from references.coco_utils import get_coco_api_from_dataset
+from references.coco_eval import CocoEvaluator
+import references.utils as utils
 
 
-def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
+def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, name='ex0'):
     model.train()
-    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger = utils.MetricLogger(delimiter="  ", name=name)
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
 
