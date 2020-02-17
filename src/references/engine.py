@@ -10,11 +10,16 @@ from references.coco_eval import CocoEvaluator
 import references.utils as utils
 
 
-def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, name='ex0'):
+def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, name='ex0',
+                    model_name='normal'):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ", name=name)
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
+
+    model_without_ddp = model
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        model_without_ddp = model.module
 
     lr_scheduler = None
     if epoch == 0:
@@ -22,6 +27,12 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, na
         warmup_iters = min(1000, len(data_loader) - 1)
 
         lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
+
+    if model_name == 'attention':
+        if epoch <= 10:
+            model_without_ddp.roi_heads.box_head_attention.use_attention_aug = False
+        else:
+            model_without_ddp.roi_heads.box_head_attention.use_attention_aug = True
 
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)

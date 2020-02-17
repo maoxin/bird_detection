@@ -19,6 +19,8 @@ def get_model_attention(num_classes=4, pretrained=True):
     in_channels_attention_head = model.roi_heads.box_head_attention.fc7.out_features
     model.roi_heads.box_predictor_attention = FastRCNNPredictorAttention(in_channels_two_ml_head, in_channels_attention_head, num_classes)
 
+    model.roi_heads.box_predictor = None
+
     return model
 
 class FasterRCNNAttention(FasterRCNN):
@@ -39,7 +41,7 @@ class FasterRCNNAttention(FasterRCNN):
                  box_fg_iou_thresh=0.5, box_bg_iou_thresh=0.5,
                  box_batch_size_per_image=512, box_positive_fraction=0.25,
                  bbox_reg_weights=None,
-                 attention_head_output_channels=10):
+                 attention_head_output_channels=8):
         super().__init__(backbone, num_classes=num_classes,
                  # transform parameters
                  min_size=min_size, max_size=max_size,

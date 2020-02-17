@@ -38,7 +38,7 @@ from references import utils
 from references import transforms as T
 
 from datasets.bird_dataset import BirdDataset
-from modeling.maskrcnn_resnet50_fpn import get_model
+from modeling.maskrcnn_resnet50_fpn import get_model, get_model_attention
 
 
 def get_transform(train):
@@ -86,7 +86,14 @@ def main(args):
         collate_fn=utils.collate_fn)
 
     print("Creating model")
-    model = get_model()
+    if args.model == 'normal':
+        print('normal model')
+        model = get_model()
+    elif args.model == 'attention':
+        print('attention model')
+        model = get_model_attention()
+    else:
+        raise Exception("'model' must be 'normal' or 'attention'")
     model.to(device)
 
     model_without_ddp = model
@@ -104,7 +111,7 @@ def main(args):
     if args.resume:
         print("load resume")
         checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'])
+        model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
         if not args.ft:
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
@@ -119,7 +126,8 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq, name=Path(args.output_dir).name)
+        train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq,
+                        name=Path(args.output_dir).name, model_name=args.model)
         lr_scheduler.step()
         if args.output_dir:
             utils.save_on_master({
@@ -143,6 +151,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
+    parser.add_argument('--model', default='normal', help='model name')
     parser.add_argument('--dataset', default='real', help='dataset name')
     parser.add_argument('--small-set', action='store_true', help='small set for synthesized dataset')
     parser.add_argument('--device', default='cuda', help='device')
