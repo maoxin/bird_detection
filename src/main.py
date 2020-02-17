@@ -257,4 +257,4 @@ def exa5():
     subprocess.run(command)
 
 if __name__ == "__main__":
-    exa5()
+    exa4()
