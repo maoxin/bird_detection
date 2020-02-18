@@ -26,29 +26,21 @@ import torch
 import torch.utils.data
 from torch import nn
 import torchvision
-import torchvision.models.detection
-import torchvision.models.detection.mask_rcnn
 
-from references.coco_utils import get_coco, get_coco_kp
-
-from references.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
-from references.engine import train_one_epoch, evaluate
+from references.engine import train_one_epoch_cls, evaluate_cls
 
 from references import utils
-from references import transforms as T
+from torchvision import transforms as T
 
-from datasets.bird_dataset import BirdDataset
-from modeling.maskrcnn_resnet50_fpn import get_model, get_model_attention
+from datasets.bird_dataset import BirdDatasetCls
+from modeling.resnet50 import ResNet50Attention, ResNet50
 
 
 def get_transform(train):
     transforms = []
-    # if train:
-        # transforms = [T.RandomColorJitter(), T.RandomGrayscale()]
-        # transforms = [T.RandomColorJitter()]
-    transforms.append(T.ToTensor())
     if train:
-        transforms.append(T.RandomHorizontalFlip(0.5))
+        transforms = [T.Resize((256, 256)), T.RandomHorizontalFlip()]
+    transforms.append(T.ToTensor())
     return T.Compose(transforms)
 
 
@@ -61,10 +53,8 @@ def main(args):
     # Data loading code
     print("Loading data")
 
-    dataset = BirdDataset(name=args.dataset, transforms=get_transform(True), train=True, small_set=args.small_set,
-                          only_instance=args.only_instance)
-    dataset_test = BirdDataset(name=args.dataset, transforms=get_transform(False), train=False, small_set=args.small_set,
-                               only_instance=args.only_instance)
+    dataset = BirdDatasetCls(name=args.dataset, transforms=get_transform(True), train=True, small_set=args.small_set)
+    dataset_test = BirdDatasetCls(name=args.dataset, transforms=get_transform(False), train=False, small_set=args.small_set)
 
     print("Creating data loaders")
     if args.distributed:
@@ -74,32 +64,25 @@ def main(args):
         train_sampler = torch.utils.data.RandomSampler(dataset)
         test_sampler = torch.utils.data.SequentialSampler(dataset_test)
 
-    if args.aspect_ratio_group_factor >= 0:
-        group_ids = create_aspect_ratio_groups(dataset, k=args.aspect_ratio_group_factor)
-        train_batch_sampler = GroupedBatchSampler(train_sampler, group_ids, args.batch_size)
-    else:
-        train_batch_sampler = torch.utils.data.BatchSampler(
-            train_sampler, args.batch_size, drop_last=True)
+    train_batch_sampler = torch.utils.data.BatchSampler(
+        train_sampler, args.batch_size, drop_last=True)
 
-    data_loader = torch.utils.data.DataLoader(
-        dataset, batch_sampler=train_batch_sampler, num_workers=args.workers,
-        collate_fn=utils.collate_fn)
-
+    data_loader = torch.utils.data.DataLoader(dataset, batch_sampler=train_batch_sampler, num_workers=args.workers,
+                                              )
     data_loader_test = torch.utils.data.DataLoader(
         dataset_test, batch_size=1,
-        sampler=test_sampler, num_workers=args.workers,
-        collate_fn=utils.collate_fn)
+        sampler=test_sampler, num_workers=args.workers)
 
     print("Creating model")
     if args.model == 'normal':
         print('normal model')
-        model = get_model(num_classes=args.num_classes)
+        model = ResNet50(num_classes=args.num_classes)
     elif args.model == 'attention':
         print('attention model')
-        model = get_model_attention(num_classes=args.num_classes)
+        model = ResNet50Attention(num_classes=args.num_classes)
     elif args.model == 'attention_transformer':
         print('attention transformer model')
-        model = get_model_attention(transformer=True, num_classes=args.num_classes)
+        model = ResNet50Attention(num_classes=args.num_classes, use_transformer=True)
     else:
         raise Exception("'model' must be 'normal' or 'attention' or 'attention_transformer'")
     model.to(device)
@@ -126,7 +109,7 @@ def main(args):
             args.start_epoch = checkpoint['epoch'] + 1
 
     if args.test_only:
-        evaluate(model, data_loader_test, device=device)
+        evaluate_cls(model, data_loader_test, device=device, name=Path(args.output_dir).name)
         return
 
     print("Start training")
@@ -134,8 +117,8 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq,
-                        name=Path(args.output_dir).name, use_aug=args.use_aug)
+        train_one_epoch_cls(model, optimizer, data_loader, device, epoch, args.print_freq,
+                            name=Path(args.output_dir).name, model_name=args.model)
         lr_scheduler.step()
         if args.output_dir:
             utils.save_on_master({
@@ -147,7 +130,7 @@ def main(args):
                 os.path.join(args.output_dir, 'model_{}.pth'.format(epoch)))
 
         # evaluate after every epoch
-        evaluate(model, data_loader_test, device=device)
+        evaluate_cls(model, data_loader_test, device=device, name=Path(args.output_dir).name, epoch_num=epoch)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -160,11 +143,9 @@ if __name__ == "__main__":
         description=__doc__)
 
     parser.add_argument('--model', default='normal', help='model name')
-    parser.add_argument('--use-aug', action='store_true', help='whether to use aug')
-    parser.add_argument('--num-classes', default=4, help='number of classes to identify')
+    parser.add_argument('--num-classes', default=3, help='number of classes to identify')
     parser.add_argument('--dataset', default='real', help='dataset name')
     parser.add_argument('--small-set', action='store_true', help='small set for synthesized dataset')
-    parser.add_argument('--only-instance', action='store_true', help='detect instance only')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
@@ -188,7 +169,6 @@ if __name__ == "__main__":
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--ft', action="store_true", help='fine tune')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
-    parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)
     parser.add_argument(
         "--test-only",
         dest="test_only",

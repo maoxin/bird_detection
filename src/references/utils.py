@@ -148,10 +148,11 @@ def reduce_dict(input_dict, average=True):
 
 
 class MetricLogger(object):
-    def __init__(self, delimiter="\t", name='ex0'):
+    def __init__(self, delimiter="\t", name='ex0', task='train'):
         self.meters = defaultdict(SmoothedValue)
         self.delimiter = delimiter
         self.tb_writer = SummaryWriter(str(Path("/media/data1/mx_log")/f"bird_detection/{name}"))
+        self.task = task
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -183,7 +184,7 @@ class MetricLogger(object):
     def add_meter(self, name, meter):
         self.meters[name] = meter
 
-    def log_every(self, iterable, print_freq, header=None):
+    def log_every(self, iterable, print_freq, header=None, epoch=0):
         i = 0
         if not header:
             header = ''
@@ -217,13 +218,6 @@ class MetricLogger(object):
             yield obj
             iter_time.update(time.time() - end)
             if i % print_freq == 0 or i == len(iterable) - 1:
-                pattern = re.compile(r".*\[(\d*)\].*")
-                match = pattern.match(str(header))
-                if match:
-                    loss_dict_to_tb = {name: meter.avg for name, meter in self.meters.items()}
-                    for name, meter in loss_dict_to_tb.items():
-                        self.tb_writer.add_scalar(f'train/{name}', meter, int(match.group(1)) * len(iterable) + i)
-
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
@@ -237,6 +231,9 @@ class MetricLogger(object):
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
+                if self.task == 'tain':
+                    for name, meter in self.meters.items():
+                        self.tb_writer.add_scalar(f"train/{name}", meter.value, epoch * len(iterable) + i)
             i += 1
             end = time.time()
         total_time = time.time() - start_time

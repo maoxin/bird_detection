@@ -1,126 +1,174 @@
 import random
 
+import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
 from torchvision.models.detection.roi_heads import RoIHeads as RoIHeadsOld
 from torchvision.models.detection.roi_heads import fastrcnn_loss
+from torchvision.ops import boxes as box_ops
 from torch.jit.annotations import Optional, List, Dict, Tuple
 
+def attention_crop_drop(attention_maps,input_image):
+    # start = time.time()
+    B,N,W,H = input_image.shape
+    input_tensor = input_image
+    batch_size, num_parts, height, width = attention_maps.shape
+
+    # attention_maps = torch.nn.functional.interpolate(attention_maps.detach(),size=(W,H),mode='bilinear')
+    attention_maps = attention_maps.detach()
+    part_weights = F.avg_pool2d(attention_maps.detach(),(W,H)).reshape(batch_size,-1)
+    part_weights = torch.add(torch.sqrt(part_weights),1e-12)
+    part_weights = torch.div(part_weights,torch.sum(part_weights,dim=1).unsqueeze(1)).cpu()
+    part_weights = part_weights.numpy()
+    # print(part_weights.shape)
+    ret_imgs = []
+    masks = []
+    # print(part_weights[3])
+    for i in range(batch_size):
+        attention_map = attention_maps[i]
+        part_weight = part_weights[i]
+        selected_index = np.random.choice(np.arange(0, num_parts), 1, p=part_weight)[0]
+        selected_index2 = np.random.choice(np.arange(0, num_parts), 1, p=part_weight)[0]
+        ## create crop imgs
+        mask = attention_map[selected_index, :, :]
+        # mask = (mask-mask.min())/(mask.max()-mask.min())
+        threshold = random.uniform(0.4, 0.6)
+        # threshold = 0.5
+        itemindex = np.where(mask.cpu() >= mask.cpu().max()*threshold)
+        # print(itemindex.shape)
+        # itemindex = torch.nonzero(mask >= threshold*mask.max())
+        padding_h = max(int(0.1*H), 1)
+        padding_w = max(int(0.1*W), 1)
+        height_min = itemindex[0].min()
+        height_min = max(0,height_min-padding_h)
+        height_max = itemindex[0].max() + padding_h
+        width_min = itemindex[1].min()
+        width_min = max(0,width_min-padding_w)
+        width_max = itemindex[1].max() + padding_w
+        # print('numpy',height_min,height_max,width_min,width_max)
+        out_img = input_tensor[i][:,height_min:height_max,width_min:width_max].unsqueeze(0)
+        out_img = torch.nn.functional.interpolate(out_img,size=(W,H),mode='bilinear',align_corners=True)
+        out_img = out_img.squeeze(0)
+        ret_imgs.append(out_img)
+
+        ## create drop imgs
+        mask2 = attention_map[selected_index2:selected_index2 + 1, :, :]
+        threshold = random.uniform(0.2, 0.5)
+        mask2 = (mask2 < threshold * mask2.max()).float()
+        masks.append(mask2)
+    # bboxes = np.asarray(bboxes, np.float32)
+    crop_imgs = torch.stack(ret_imgs)
+    masks = torch.stack(masks)
+    drop_imgs = input_tensor*masks
+    return (crop_imgs,drop_imgs)
+
+def mask2bbox(attention_maps,input_image):
+    input_tensor = input_image
+    B,C,H,W = input_tensor.shape
+    batch_size, num_parts, Hh, Ww = attention_maps.shape
+    # attention_maps = torch.nn.functional.interpolate(attention_maps,size=(W,H),mode='bilinear')
+    ret_imgs = []
+    # print(part_weights[3])
+    for i in range(batch_size):
+        attention_map = attention_maps[i]
+        # print(attention_map.shape)
+        mask = attention_map.mean(dim=0)
+        # print(type(mask))
+        # mask = (mask-mask.min())/(mask.max()-mask.min())
+        # threshold = random.uniform(0.4, 0.6)
+        threshold = 0.1
+        max_activate = mask.max()
+        min_activate = threshold * max_activate
+        itemindex = torch.nonzero(mask >= min_activate)
+
+        padding_h = max(int(0.05*H), 1)
+        padding_w = max(int(0.05*W), 1)
+        height_min = itemindex[:, 0].min()
+        height_min = max(0,height_min-padding_h)
+        height_max = itemindex[:, 0].max() + padding_h
+        width_min = itemindex[:, 1].min()
+        width_min = max(0,width_min-padding_w)
+        width_max = itemindex[:, 1].max() + padding_w
+        # print(height_min,height_max,width_min,width_max)
+        out_img = input_tensor[i][:,height_min:height_max,width_min:width_max].unsqueeze(0)
+        out_img = torch.nn.functional.interpolate(out_img,size=(W,H),mode='bilinear',align_corners=True)
+        out_img = out_img.squeeze(0)
+        # print(out_img.shape)
+        ret_imgs.append(out_img)
+    ret_imgs = torch.stack(ret_imgs)
+    # print(ret_imgs.shape)
+    return ret_imgs
+
 # use AttentionHead as well as TwoMLHead; AttentionHead for classification, TwoMLHead for box regression
+class BAP(nn.Module):
+    def __init__(self,  **kwargs):
+        super(BAP, self).__init__()
+    def forward(self,feature_maps,attention_maps):
+        feature_shape = feature_maps.size() ## N*Cf*7*7*
+        attention_shape = attention_maps.size() ## N*Ca*7*7
+        # print(feature_shape,attention_shape)
+        phi_I = torch.einsum('imjk,injk->imn', (attention_maps, feature_maps)) ## N*Ca*Cf
+        phi_I = torch.div(phi_I, float(attention_shape[2] * attention_shape[3]))
+        phi_I = torch.mul(torch.sign(phi_I), torch.sqrt(torch.abs(phi_I) + 1e-12))
+        phi_I = phi_I.view(feature_shape[0],-1) # (N, Ca*Cf)
+        raw_features = torch.nn.functional.normalize(phi_I, dim=-1) ##N*(Ca*Cf)
+        pooling_features = raw_features*100
+        # print(pooling_features.shape)
+        return raw_features,pooling_features
+
 class AttentionHead(nn.Module):
-    def __init__(self, in_channels, out_channels, representation_size=1024, attention_threshold=0.8, num_classes=4):
+    def __init__(self, in_channels, out_channels, num_classes=4):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.attention_threshold = attention_threshold
         self.num_classes = num_classes
 
         self.attention_conv = nn.Conv2d(in_channels, out_channels,
-                                        kernel_size=3, stride=1, padding=1)
-        # self.norm_layer = nn.BatchNorm2d(out_channels)
-        self.avg_pool = nn.AdaptiveMaxPool2d(1)
-        self.fc6 = nn.Linear(in_channels * out_channels, representation_size)
-        self.fc7 = nn.Linear(representation_size, representation_size)
+                                        kernel_size=3, stride=1, padding=1, bias=False)
+        self.attention_bn = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.bap = BAP()
 
         self.register_buffer('ck_buffer', torch.zeros(num_classes, in_channels * out_channels))
-
-        self.use_attention_aug = True
 
     def ck_loss(self, x, labels):
         x = F.normalize(x.flatten(1), dim=1)
         labels = torch.cat(labels, dim=0)
         # x = x[labels!=0]
         # labels = labels[labels!=0]
-
         ck_buffer = self.ck_buffer[labels]
+        ck_buffer = F.normalize(ck_buffer.flatten(1), dim=1)
+
         ck_loss = ((x - ck_buffer)**2).sum() / x.size(0)
 
         with torch.no_grad():
             for label in torch.unique(labels):
-                self.ck_buffer[label] = self.ck_buffer[label] * 0.9 + x[labels==label].mean(0) * 0.1
+                self.ck_buffer[label] = self.ck_buffer[label] * 0.95 + x[labels==label].mean(0) * 0.05
         
         return ck_loss
-    
-    def get_attention_mask(self, attention_map):
-        with torch.no_grad():
-            idx = random.randint(0, self.out_channels - 1)
-            attention_mask = attention_map[:, idx, :, :]
-            attention_mask = (attention_mask - attention_mask.min()) / (attention_mask.max() - attention_mask.min())
-            attention_mask = attention_mask > self.attention_threshold
-
-        return attention_mask
-
-    def attention_drop(self, attention_map, x):
-        attention_mask = self.get_attention_mask(attention_map)
-        attention_mask = attention_mask.unsqueeze(1).unsqueeze(1).expand(x.shape)
-
-        x = torch.where(attention_mask==True, x, torch.randn_like(x))
-        x = self.avg_pool(x.flatten(1, 2)).flatten(1).view(-1, self.in_channels, self.out_channels)
-
-        return x
-
-
-    def attention_crop(self, attention_map, x):
-        # new_x = []
-
-        # attention_mask = self.get_attention_mask(attention_map)
-        # for n, m in enumerate(attention_mask):
-        #     l_i, l_j = (m == True).nonzero().transpose(0, 1)
-        #     i_min = l_i.min().item()
-        #     i_max = l_i.max().item()
-        #     j_min = l_j.min().item()
-        #     j_max = l_j.max().item()
-
-        #     if (j_max + 1 - j_min <= 0 and i_max + 1 - i_min <= 0) or len(l_i) == 0:
-        #         new_x.append(self.avg_pool(x.narrow(0, n, 1).squeeze(0)).unsqueeze(0))
-        #     else:
-        #         # new_x.append(self.avg_pool(x[n, :, :, i_min:i_max+1, j_min:j_max+1]).unsqueeze(0))
-        #         new_x.append(self.avg_pool(x.narrow(0, n, 1).narrow(3, i_min, i_max - i_min + 1).narrow(4, j_min, j_max - j_min + 1).squeeze(0)).unsqueeze(0))
-
-        # x = torch.cat(new_x).flatten(2)
-
-        attention_mask = self.get_attention_mask(attention_map)
-        attention_mask = attention_mask.unsqueeze(1).unsqueeze(1).expand(x.shape)
-
-        x = torch.where(attention_mask==False, x, torch.randn_like(x))
-        x = self.avg_pool(x.flatten(1, 2)).flatten(1).view(-1, self.in_channels, self.out_channels)
-
-        return x
-        
-        return x
 
     def forward(self, x):
-        # batchnorm bad result; relu not too bad; softmax bad;
-        # attention_map = F.softmax(F.relu(self.norm_layer(self.attention_conv(x))), dim=1)
-        attention_map = self.attention_conv(x)
+        attention_map = self.relu(self.attention_bn(self.attention_conv(x)))
+        # relu, so >= 0
         # (N, output_channels, H, W)
-        x = attention_map.unsqueeze(1) * x.unsqueeze(2)
-        # new x: (N, in_channels, out_channels, H, W)
+        raw_x, x = self.bap(x, attention_map)
+        # (N, out_channels * in_channels)
 
-        x_pool = self.avg_pool(x.flatten(1, 2)).flatten(1).view(-1, self.in_channels, self.out_channels)
+        return attention_map, raw_x, x
 
-        if self.training:
-            if self.use_attention_aug:
-            # when training, Attention Guided Data Augmentation
-                if random.random() <= 0.33:
-                    # x = self.attention_crop(attention_map, x)
-                    x = self.avg_pool(x.flatten(1, 2)).flatten(1).view(-1, self.in_channels, self.out_channels)
-                elif random.random() <= 0.66:
-                    x = self.attention_drop(attention_map, x)
-                else:
-                    x = self.avg_pool(x.flatten(1, 2)).flatten(1).view(-1, self.in_channels, self.out_channels)
-                # (N, in_channels, out_channels)
-            else:
-                x = self.avg_pool(x.flatten(1, 2)).flatten(1).view(-1, self.in_channels, self.out_channels)
-        else:
-            x = self.avg_pool(x.flatten(1, 2)).flatten(1).view(-1, self.in_channels, self.out_channels)
+class AttentionHeadTransformer(AttentionHead):
+    def __init__(self, in_channels, out_channels, num_classes=4):
+        super().__init__(in_channels, out_channels, num_classes)
+        transformer_layer = nn.TransformerEncoderLayer(d_model=in_channels, nhead=8)
+        self.transformer_encoder = nn.TransformerEncoder(transformer_layer, num_layers=3)
 
-        x = x.flatten(1)
-        x = F.relu(self.fc6(x))
-        x = F.relu(self.fc7(x))
+    def forward(self, x):
+        attention_map, raw_x, x = super().forward(x)
 
-        return x, x_pool
+        x = F.relu(self.transformer_encoder(x.view(-1, self.out_channels, self.in_channels))).flatten(1)
+
+        return attention_map, raw_x, x
 
 class RoIHeads(RoIHeadsOld):
     def __init__(self,
@@ -166,6 +214,7 @@ class RoIHeads(RoIHeadsOld):
         
         self.box_head_attention = box_head_attention
         self.box_predictor_attention = box_predictor_attention
+        self.use_aug = False
 
     def forward(self, features, proposals, image_shapes, targets=None):
         # type: (Dict[str, Tensor], List[Tensor], List[Tuple[int, int]], Optional[List[Dict[str, Tensor]]])
@@ -194,8 +243,7 @@ class RoIHeads(RoIHeadsOld):
 
         box_features_0 = self.box_roi_pool(features, proposals, image_shapes)
         box_features = self.box_head(box_features_0)
-        box_features_attention, box_features_attention_pool = self.box_head_attention(box_features_0)
-        # class_logits, box_regression = self.box_predictor(box_features)
+        attention_map, raw_box_features_attention, box_features_attention = self.box_head_attention(box_features_0)
         class_logits, box_regression = self.box_predictor_attention(box_features, box_features_attention)
 
         result = torch.jit.annotate(List[Dict[str, torch.Tensor]], [])
@@ -204,14 +252,34 @@ class RoIHeads(RoIHeadsOld):
             assert labels is not None and regression_targets is not None
             loss_classifier, loss_box_reg = fastrcnn_loss(
                 class_logits, box_regression, labels, regression_targets)
-            loss_ck = self.box_head_attention.ck_loss(box_features_attention_pool, labels)
+            # for aug images
+            if self.use_aug:
+                box_features_0_crop, box_features_0_drop = attention_crop_drop(attention_map, box_features_0)
+                _, _, box_features_attention1 = self.box_head_attention(box_features_0_crop)
+                class_logits1, box_regression1 = self.box_predictor_attention(box_features, box_features_attention1)
+                _, _, box_features_attention2 = self.box_head_attention(box_features_0_drop)
+                class_logits2, box_regression2 = self.box_predictor_attention(box_features, box_features_attention2)
+
+                loss_classifier1, _ = fastrcnn_loss(
+                    class_logits1, box_regression1, labels, regression_targets)
+                loss_classifier2, _ = fastrcnn_loss(
+                    class_logits2, box_regression2, labels, regression_targets)
+                loss_classifier = (loss_classifier + loss_classifier1 + loss_classifier2) / 3
+
+            loss_ck = self.box_head_attention.ck_loss(raw_box_features_attention, labels)
             losses = {
                 "loss_classifier": loss_classifier,
                 "loss_box_reg": loss_box_reg,
                 "loss_ck": loss_ck,
             }
         else:
-            boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
+            if self.use_aug:
+                refined_input = mask2bbox(attention_map, box_features_0)
+                _, _, box_features_attention1 = self.box_head_attention(refined_input)
+                class_logits1, _ = self.box_predictor_attention(box_features, box_features_attention1)
+                boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes, class_logits1)    
+            else:
+                boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
             num_images = len(boxes)
             for i in range(num_images):
                 result.append(
@@ -313,6 +381,68 @@ class RoIHeads(RoIHeadsOld):
             losses.update(loss_keypoint)
 
         return result, losses
+    def postprocess_detections(self, class_logits, box_regression, proposals, image_shapes, class_logits1=None):
+        # type: (Tensor, Tensor, List[Tensor], List[Tuple[int, int]])
+        device = class_logits.device
+        num_classes = class_logits.shape[-1]
+
+        boxes_per_image = [len(boxes_in_image) for boxes_in_image in proposals]
+        pred_boxes = self.box_coder.decode(box_regression, proposals)
+
+        if class_logits1 is None:
+            pred_scores = F.softmax(class_logits, -1)
+        else:
+            pred_scores = (F.softmax(class_logits, dim=-1) + F.softmax(class_logits1, dim=-1)) / 2
+
+        # split boxes and scores per image
+        if len(boxes_per_image) == 1:
+            # TODO : remove this when ONNX support dynamic split sizes
+            # and just assign to pred_boxes instead of pred_boxes_list
+            pred_boxes_list = [pred_boxes]
+            pred_scores_list = [pred_scores]
+        else:
+            pred_boxes_list = pred_boxes.split(boxes_per_image, 0)
+            pred_scores_list = pred_scores.split(boxes_per_image, 0)
+
+        all_boxes = []
+        all_scores = []
+        all_labels = []
+        for boxes, scores, image_shape in zip(pred_boxes_list, pred_scores_list, image_shapes):
+            boxes = box_ops.clip_boxes_to_image(boxes, image_shape)
+
+            # create labels for each prediction
+            labels = torch.arange(num_classes, device=device)
+            labels = labels.view(1, -1).expand_as(scores)
+
+            # remove predictions with the background label
+            boxes = boxes[:, 1:]
+            scores = scores[:, 1:]
+            labels = labels[:, 1:]
+
+            # batch everything, by making every class prediction be a separate instance
+            boxes = boxes.reshape(-1, 4)
+            scores = scores.reshape(-1)
+            labels = labels.reshape(-1)
+
+            # remove low scoring boxes
+            inds = torch.nonzero(scores > self.score_thresh).squeeze(1)
+            boxes, scores, labels = boxes[inds], scores[inds], labels[inds]
+
+            # remove empty boxes
+            keep = box_ops.remove_small_boxes(boxes, min_size=1e-2)
+            boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
+
+            # non-maximum suppression, independently done per class
+            keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh)
+            # keep only topk scoring predictions
+            keep = keep[:self.detections_per_img]
+            boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
+
+            all_boxes.append(boxes)
+            all_scores.append(scores)
+            all_labels.append(labels)
+
+        return all_boxes, all_scores, all_labels
         
 class FastRCNNPredictorAttention(nn.Module):
     """

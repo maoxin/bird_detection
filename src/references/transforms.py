@@ -2,6 +2,7 @@ import random
 import torch
 
 from torchvision.transforms import functional as F
+from torchvision import transforms
 
 
 def _flip_coco_person_keypoints(kps, width):
@@ -41,6 +42,23 @@ class RandomHorizontalFlip(object):
                 keypoints = target["keypoints"]
                 keypoints = _flip_coco_person_keypoints(keypoints, width)
                 target["keypoints"] = keypoints
+        return image, target
+
+class RandomColorJitter:
+    def __init__(self, brightness=32./255.,saturation=0.5):
+        self.transforms = transforms.ColorJitter(brightness=brightness, saturation=saturation)
+
+    def __call__(self, image, target):
+        image = self.transforms(image)
+        
+        return image, target
+
+class RandomGrayscale:
+    def __init__(self):
+        self.transforms = transforms.RandomGrayscale()
+    def __call__(self, image, target):
+        image = self.transforms(image)
+
         return image, target
 
 

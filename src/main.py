@@ -127,7 +127,7 @@ def ex4():
 # attention model ex
 ## ex1
 def exa1():
-    # ft baseline
+    # baseline, attention, no aug
     command = [
         "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
         "-m",
@@ -156,9 +156,8 @@ def exa1():
 
     subprocess.run(command)
 
-## ex2
 def exa2():
-    # ft baseline
+    # baseline, attention, aug
     command = [
         "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
         "-m",
@@ -168,9 +167,9 @@ def exa2():
         "train_bird_detection.py",
         "--model",
         'attention',
+        "--use-aug",
         "--dataset",
-        "synthesized",
-        "--small-set",
+        "real",
         "--epochs",
         "26",
         "--lr",
@@ -187,6 +186,38 @@ def exa2():
     ]
 
     subprocess.run(command)
+
+## ex2
+# def exa2():
+#     # ft baseline
+#     command = [
+#         "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+#         "-m",
+#         "torch.distributed.launch",
+#         "--nproc_per_node=2",
+#         "--use_env",
+#         "train_bird_detection.py",
+#         "--model",
+#         'attention',
+#         "--dataset",
+#         "synthesized",
+#         "--small-set",
+#         "--epochs",
+#         "26",
+#         "--lr",
+#         "0.005",
+#         "--lr-steps",
+#         "16",
+#         "22",
+#         "--aspect-ratio-group-factor",
+#         "3",
+#         "--print-freq",
+#         "5",
+#         "--output-dir",
+#         "/media/data1/mx_model/bird_detection/bird_detection/exa2",
+#     ]
+
+#     subprocess.run(command)
 
 ## ex4
 def exa4():
@@ -256,5 +287,293 @@ def exa5():
 
     subprocess.run(command)
 
+# attention transformer model ex
+## ex1
+def exat1():
+    # ft baseline
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--model",
+        'attention_transformer',
+        "--dataset",
+        "real",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exat1",
+    ]
+
+    subprocess.run(command)
+
+# normal model, only instance ex
+def exi1():
+    # real baseline
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--num-classes",
+        "2",
+        "--dataset",
+        "real",
+        "--only-instance",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exi1",
+    ]
+
+    subprocess.run(command)
+
+def exi2():
+    # syn baseline
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--num-classes",
+        "2",
+        "--dataset",
+        "synthesized",
+        "--small-set",
+        "--only-instance",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exi2",
+    ]
+
+    subprocess.run(command)
+
+def exi3():
+    # syn baseline, test on real
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--num-classes",
+        "2",
+        "--dataset",
+        "real",
+        "--only-instance",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--resume",
+        "/media/data1/mx_model/bird_detection/bird_detection/exi2/model_25.pth",
+        "--test-only",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exi3",
+    ]
+
+    subprocess.run(command)
+
+def exi4():
+    # ft baseline
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--num-classes",
+        "2",
+        "--dataset",
+        "real",
+        "--only-instance",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exi4",
+        "--resume",
+        "/media/data1/mx_model/bird_detection/bird_detection/exi2/model_25.pth",
+        "--ft",
+    ]
+
+    subprocess.run(command)
+
+def exi5():
+    # ft baseline, small lr
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--num-classes",
+        "2",
+        "--dataset",
+        "real",
+        "--only-instance",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.0005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exi5",
+        "--resume",
+        "/media/data1/mx_model/bird_detection/bird_detection/exi2/model_25.pth",
+        "--ft",
+    ]
+
+    subprocess.run(command)
+
+# coco baseline
+def exc1():
+    # real baseline
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--dataset",
+        "real",
+        "--only-instance",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exc1",
+        "--test-only",
+    ]
+
+    subprocess.run(command)
+
+def exc2():
+    # real baseline, train
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--dataset",
+        "real",
+        "--only-instance",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exc2",
+    ]
+
+    subprocess.run(command)
+
+def exc3():
+    # real baseline, train, small lr
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--dataset",
+        "real",
+        "--only-instance",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.0005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exc3",
+    ]
+
+    subprocess.run(command)
+
+
 if __name__ == "__main__":
-    exa4()
+    exa2()
