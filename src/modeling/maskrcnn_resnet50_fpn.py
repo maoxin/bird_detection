@@ -12,8 +12,9 @@ def get_model(num_classes=4, pretrained=True):
     return model
 
 
-def get_model_attention(num_classes=4, pretrained=True, transformer=False):
-    model = fasterrcnn_resnet50_fpn_attention(pretrained=pretrained, transformer=transformer)
+def get_model_attention(num_classes=4, pretrained=True, transformer=False, attention_head_output_channels=8):
+    model = fasterrcnn_resnet50_fpn_attention(pretrained=pretrained, transformer=transformer,
+                                              attention_head_output_channels=attention_head_output_channels)
     
     in_channels_two_ml_head = model.roi_heads.box_predictor.cls_score.in_features
     in_channels_attention_head = model.roi_heads.box_head_attention.in_channels * model.roi_heads.box_head_attention.out_channels
@@ -135,15 +136,20 @@ model_urls = {
 }
 def fasterrcnn_resnet50_fpn_attention(pretrained=False, progress=True,
                                       num_classes=91, pretrained_backbone=True,
+                                      attention_head_output_channels=8,
                                       transformer=False, **kwargs):
     if pretrained:
         # no need to download the backbone if pretrained is set
         pretrained_backbone = False
     backbone = resnet_fpn_backbone('resnet50', pretrained_backbone)
     if not transformer:
-        model = FasterRCNNAttention(backbone, num_classes, **kwargs)
+        model = FasterRCNNAttention(backbone, num_classes,
+                                    attention_head_output_channels=attention_head_output_channels,
+                                    **kwargs)
     else:
-        model = FasterRCNNAttentionTransformer(backbone, num_classes, **kwargs)
+        model = FasterRCNNAttentionTransformer(backbone, num_classes,
+                                               attention_head_output_channels=attention_head_output_channels,
+                                               **kwargs)
     if pretrained:
         state_dict = load_state_dict_from_url(model_urls['fasterrcnn_resnet50_fpn_coco'],
                                               progress=progress)

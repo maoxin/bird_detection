@@ -161,7 +161,7 @@ class AttentionHeadTransformer(AttentionHead):
     def __init__(self, in_channels, out_channels, num_classes=4):
         super().__init__(in_channels, out_channels, num_classes)
         transformer_layer = nn.TransformerEncoderLayer(d_model=in_channels, nhead=8)
-        self.transformer_encoder = nn.TransformerEncoder(transformer_layer, num_layers=3)
+        self.transformer_encoder = nn.TransformerEncoder(transformer_layer, num_layers=1)
 
     def forward(self, x):
         attention_map, raw_x, x = super().forward(x)

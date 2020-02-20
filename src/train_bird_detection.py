@@ -96,10 +96,12 @@ def main(args):
         model = get_model(num_classes=args.num_classes)
     elif args.model == 'attention':
         print('attention model')
-        model = get_model_attention(num_classes=args.num_classes)
+        model = get_model_attention(num_classes=args.num_classes,
+                                    attention_head_output_channels=args.num_parts)
     elif args.model == 'attention_transformer':
         print('attention transformer model')
-        model = get_model_attention(transformer=True, num_classes=args.num_classes)
+        model = get_model_attention(transformer=True, num_classes=args.num_classes,
+                                    attention_head_output_channels=args.num_parts)
     else:
         raise Exception("'model' must be 'normal' or 'attention' or 'attention_transformer'")
     model.to(device)
@@ -160,6 +162,7 @@ if __name__ == "__main__":
         description=__doc__)
 
     parser.add_argument('--model', default='normal', help='model name')
+    parser.add_argument('--num-parts', default=8, type=int, help='parts used by attention model')
     parser.add_argument('--use-aug', action='store_true', help='whether to use aug')
     parser.add_argument('--num-classes', default=4, help='number of classes to identify')
     parser.add_argument('--dataset', default='real', help='dataset name')
