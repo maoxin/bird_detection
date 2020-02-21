@@ -146,6 +146,25 @@ def reduce_dict(input_dict, average=True):
         reduced_dict = {k: v for k, v in zip(names, values)}
     return reduced_dict
 
+def reduce_tensor(input_tensor, average=True):
+    """
+    Args:
+        input_tensor (torch.tensor): tensor will be reduced
+        average (bool): whether to do average or sum
+    Reduce the values in the tensor from all processes so that all processes
+    have the averaged results. Returns a tensor with the same shape as
+    input_tensor, after reduction.
+    """
+    world_size = get_world_size()
+    with torch.no_grad():
+        new_input_tensor = input_tensor.clone()
+        if world_size < 2:
+            return new_input_tensor
+        dist.all_reduce(new_input_tensor)
+        if average:
+            new_input_tensor /= world_size
+    return new_input_tensor
+
 
 class MetricLogger(object):
     def __init__(self, delimiter="\t", name='ex0', task='train'):
@@ -231,9 +250,11 @@ class MetricLogger(object):
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
-                if self.task == 'tain':
+                if self.task == 'train' and get_rank() == 0:
                     for name, meter in self.meters.items():
-                        self.tb_writer.add_scalar(f"train/{name}", meter.value, epoch * len(iterable) + i)
+                        if name != 'model_time':
+                            self.tb_writer.add_scalar(f"train/{name}",
+                                meter.value, epoch * len(iterable) + i)
             i += 1
             end = time.time()
         total_time = time.time() - start_time

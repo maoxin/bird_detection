@@ -84,7 +84,7 @@ class BirdDataset(Dataset):
         records = []
         for r in self.records:
             labels = torch.as_tensor(r['list_label_index'], dtype=torch.int64)
-            if len(labels[labels <= 3]) > 0:
+            if len(labels[labels <= 2]) > 0:
                 records.append(r)
         self.records = records
         
@@ -96,8 +96,8 @@ class BirdDataset(Dataset):
         
         boxes = torch.as_tensor(record['list_bbox'], dtype=torch.float32)
         labels = torch.as_tensor(record['list_label_index'], dtype=torch.int64)
-        boxes = boxes[labels <= 3]
-        labels = labels[labels <= 3]
+        boxes = boxes[labels <= 2]
+        labels = labels[labels <= 2]
         image_id = torch.tensor([idx])
         area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
         iscrowd = torch.zeros((labels.size(0),), dtype=torch.int64)

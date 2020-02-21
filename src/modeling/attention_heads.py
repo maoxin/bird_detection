@@ -5,9 +5,75 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torchvision.models.detection.roi_heads import RoIHeads as RoIHeadsOld
-from torchvision.models.detection.roi_heads import fastrcnn_loss
 from torchvision.ops import boxes as box_ops
 from torch.jit.annotations import Optional, List, Dict, Tuple
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=0, alpha=None, size_average=True):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        if isinstance(alpha,(float,int)): self.alpha = torch.Tensor([alpha,1-alpha])
+        if isinstance(alpha,list): self.alpha = torch.Tensor(alpha)
+        self.size_average = size_average
+
+    def forward(self, input, target):
+        if input.dim()>2:
+            input = input.view(input.size(0),input.size(1),-1)  # N,C,H,W => N,C,H*W
+            input = input.transpose(1,2)    # N,C,H*W => N,H*W,C
+            input = input.contiguous().view(-1,input.size(2))   # N,H*W,C => N*H*W,C
+        target = target.view(-1,1)
+
+        logpt = F.log_softmax(input, dim=1)
+        logpt = logpt.gather(1,target)
+        logpt = logpt.view(-1)
+        pt = logpt.exp()
+
+        if self.alpha is not None:
+            if self.alpha.type()!=input.data.type():
+                self.alpha = self.alpha.type_as(input.data)
+            at = self.alpha.gather(0, target.view(-1))
+            logpt = logpt * at
+
+        loss = -1 * (1-pt)**self.gamma * logpt
+        if self.size_average: return loss.mean()
+        else: return loss.sum()
+
+def fastrcnn_loss(class_logits, box_regression, labels, regression_targets, cls_loss_func=F.cross_entropy):
+    # type: (Tensor, Tensor, List[Tensor], List[Tensor])
+    """
+    Computes the loss for Faster R-CNN.
+    Arguments:
+        class_logits (Tensor) (N, K)
+        box_regression (Tensor)
+        labels (list[BoxList])
+        regression_targets (Tensor)
+    Returns:
+        classification_loss (Tensor)
+        box_loss (Tensor)
+    """
+
+    labels = torch.cat(labels, dim=0)
+    regression_targets = torch.cat(regression_targets, dim=0)
+
+    classification_loss = cls_loss_func(class_logits, labels)
+
+    # get indices that correspond to the regression targets for
+    # the corresponding ground truth labels, to be used with
+    # advanced indexing
+    sampled_pos_inds_subset = torch.nonzero(labels > 0).squeeze(1)
+    labels_pos = labels[sampled_pos_inds_subset]
+    N, num_classes = class_logits.shape
+    box_regression = box_regression.reshape(N, -1, 4)
+
+    box_loss = F.smooth_l1_loss(
+        box_regression[sampled_pos_inds_subset, labels_pos],
+        regression_targets[sampled_pos_inds_subset],
+        reduction="sum",
+    )
+    box_loss = box_loss / labels.numel()
+
+    return classification_loss, box_loss
 
 def attention_crop_drop(attention_maps,input_image):
     # start = time.time()
@@ -192,6 +258,8 @@ class RoIHeads(RoIHeadsOld):
                  keypoint_roi_pool=None,
                  keypoint_head=None,
                  keypoint_predictor=None,
+                 use_focal_loss=False,
+                 focal_gamma=2,
                  ):
         super().__init__(box_roi_pool,
                  box_head,
@@ -212,6 +280,12 @@ class RoIHeads(RoIHeadsOld):
                  keypoint_head,
                  keypoint_predictor)
         
+        self.use_focal_loss = use_focal_loss
+        self.focal_gamma = focal_gamma
+        if not use_focal_loss:
+            self.cls_loss_func = nn.CrossEntropyLoss()
+        else:
+            self.cls_loss_func = FocalLoss(gamma=focal_gamma)
         self.box_head_attention = box_head_attention
         self.box_predictor_attention = box_predictor_attention
         self.use_aug = False
@@ -251,7 +325,7 @@ class RoIHeads(RoIHeadsOld):
         if self.training:
             assert labels is not None and regression_targets is not None
             loss_classifier, loss_box_reg = fastrcnn_loss(
-                class_logits, box_regression, labels, regression_targets)
+                class_logits, box_regression, labels, regression_targets, self.cls_loss_func)
             # for aug images
             if self.use_aug:
                 box_features_0_crop, box_features_0_drop = attention_crop_drop(attention_map, box_features_0)
@@ -261,9 +335,11 @@ class RoIHeads(RoIHeadsOld):
                 class_logits2, box_regression2 = self.box_predictor_attention(box_features, box_features_attention2)
 
                 loss_classifier1, _ = fastrcnn_loss(
-                    class_logits1, box_regression1, labels, regression_targets)
+                    class_logits1, box_regression1, labels, regression_targets,
+                    self.cls_loss_func)
                 loss_classifier2, _ = fastrcnn_loss(
-                    class_logits2, box_regression2, labels, regression_targets)
+                    class_logits2, box_regression2, labels, regression_targets,
+                    self.cls_loss_func)
                 loss_classifier = (loss_classifier + loss_classifier1 + loss_classifier2) / 3
 
             loss_ck = self.box_head_attention.ck_loss(raw_box_features_attention, labels)

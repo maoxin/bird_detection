@@ -253,7 +253,6 @@ def exa4():
 
     subprocess.run(command)
 
-## ex2
 # def exa2():
 #     # ft baseline
 #     command = [
@@ -285,7 +284,6 @@ def exa4():
 
 #     subprocess.run(command)
 
-## ex4
 # def exa4():
 #     # ft baseline
 #     command = [
@@ -349,6 +347,161 @@ def exa5():
         "--resume",
         "/media/data1/mx_model/bird_detection/bird_detection/ex1/model_25.pth",
         "--ft",
+    ]
+
+    subprocess.run(command)
+
+def exa6():
+    # baseline, attention, no aug, FocalLoss
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--model",
+        'attention',
+        "--dataset",
+        "real",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exa6",
+    ]
+
+    subprocess.run(command)
+
+def exa7():
+    # baseline, attention, no aug, FocalLoss gamma5
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--model",
+        'attention',
+        "--dataset",
+        "real",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exa7",
+    ]
+
+    subprocess.run(command)
+
+def exa8():
+    # baseline, attention, no aug, FocalLoss gamma2
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--model",
+        'attention',
+        "--dataset",
+        "real",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exa8",
+    ]
+
+    subprocess.run(command)
+
+# egret version
+def exae1():
+    # baseline, attention, no aug, FocalLoss gamma2
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--model",
+        'attention',
+        "--num-classes",
+        "3",
+        "--dataset",
+        "real",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exae1",
+    ]
+
+    subprocess.run(command)
+
+def exae2():
+    # baseline, attention, no aug, FocalLoss gamma0
+    command = [
+        "/home/jz76/.local/share/virtualenvs/bird_detection-twxm2RaN/bin/python",
+        "-m",
+        "torch.distributed.launch",
+        "--nproc_per_node=2",
+        "--use_env",
+        "train_bird_detection.py",
+        "--model",
+        'attention',
+        "--num-classes",
+        "3",
+        "--dataset",
+        "real",
+        "--epochs",
+        "26",
+        "--lr",
+        "0.005",
+        "--lr-steps",
+        "16",
+        "22",
+        "--aspect-ratio-group-factor",
+        "3",
+        "--print-freq",
+        "5",
+        "--output-dir",
+        "/media/data1/mx_model/bird_detection/bird_detection/exae2",
     ]
 
     subprocess.run(command)
@@ -774,4 +927,4 @@ def exc3():
 
 
 if __name__ == "__main__":
-    exat3()
+    exae2()

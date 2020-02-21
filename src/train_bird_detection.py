@@ -62,9 +62,9 @@ def main(args):
     print("Loading data")
 
     dataset = BirdDataset(name=args.dataset, transforms=get_transform(True), train=True, small_set=args.small_set,
-                          only_instance=args.only_instance)
+        only_instance=args.only_instance)
     dataset_test = BirdDataset(name=args.dataset, transforms=get_transform(False), train=False, small_set=args.small_set,
-                               only_instance=args.only_instance)
+        only_instance=args.only_instance)
 
     print("Creating data loaders")
     if args.distributed:
@@ -128,8 +128,8 @@ def main(args):
             args.start_epoch = checkpoint['epoch'] + 1
 
     if args.test_only:
-        evaluate(model, data_loader_test, device=device)
-        return
+        evaluator = evaluate(model, data_loader_test, device=device, epoch=0, name=Path(args.output_dir).name)
+        return evaluator
 
     print("Start training")
     start_time = time.time()
@@ -149,7 +149,7 @@ def main(args):
                 os.path.join(args.output_dir, 'model_{}.pth'.format(epoch)))
 
         # evaluate after every epoch
-        evaluate(model, data_loader_test, device=device)
+        evaluate(model, data_loader_test, epoch=epoch, device=device, name=Path(args.output_dir).name)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -164,7 +164,9 @@ if __name__ == "__main__":
     parser.add_argument('--model', default='normal', help='model name')
     parser.add_argument('--num-parts', default=8, type=int, help='parts used by attention model')
     parser.add_argument('--use-aug', action='store_true', help='whether to use aug')
-    parser.add_argument('--num-classes', default=4, help='number of classes to identify')
+    parser.add_argument('--num-classes', default=4, type=int, help='number of classes to identify')
+    parser.add_argument('--use-focal-loss', action="store_true", help="whether to use focal loss")
+    parser.add_argument('--focal-gamma', default=2., type=float, help='focal gamma')
     parser.add_argument('--dataset', default='real', help='dataset name')
     parser.add_argument('--small-set', action='store_true', help='small set for synthesized dataset')
     parser.add_argument('--only-instance', action='store_true', help='detect instance only')
@@ -215,4 +217,4 @@ if __name__ == "__main__":
     if args.output_dir:
         utils.mkdir(args.output_dir)
 
-    main(args)
+    evaluator = main(args)
