@@ -5,6 +5,13 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 
+import torch
+import numpy as np
+import random
+random.seed(0)
+np.random.seed(0)
+torch.manual_seed(0)
+
 RootDir = Path("/media/data1/mx_dataset")
 
 class BirdDatasetCls(Dataset):
@@ -84,7 +91,7 @@ class BirdDataset(Dataset):
         records = []
         for r in self.records:
             labels = torch.as_tensor(r['list_label_index'], dtype=torch.int64)
-            if len(labels[labels <= 2]) > 0:
+            if len(labels[labels <= 3]) > 0:
                 records.append(r)
         self.records = records
         
@@ -96,8 +103,8 @@ class BirdDataset(Dataset):
         
         boxes = torch.as_tensor(record['list_bbox'], dtype=torch.float32)
         labels = torch.as_tensor(record['list_label_index'], dtype=torch.int64)
-        boxes = boxes[labels <= 2]
-        labels = labels[labels <= 2]
+        boxes = boxes[labels <= 3]
+        labels = labels[labels <= 3]
         image_id = torch.tensor([idx])
         area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
         iscrowd = torch.zeros((labels.size(0),), dtype=torch.int64)
@@ -107,7 +114,7 @@ class BirdDataset(Dataset):
         target["labels_real"] = labels
         if self.only_instance:
             target["labels"] = torch.ones_like(target["labels_real"], dtype=target["labels_real"].dtype)
-            target["labels"][:] = 16
+            target["labels"][:] = 1
         else:
             target["labels"] = target["labels_real"]
         target["image_id"] = image_id

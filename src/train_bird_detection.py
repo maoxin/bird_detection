@@ -40,6 +40,14 @@ from references import transforms as T
 from datasets.bird_dataset import BirdDataset
 from modeling.maskrcnn_resnet50_fpn import get_model, get_model_attention
 
+import torch
+import numpy as np
+import random
+random.seed(0)
+np.random.seed(0)
+torch.manual_seed(0)
+
+
 
 def get_transform(train):
     transforms = []
@@ -93,22 +101,25 @@ def main(args):
     print("Creating model")
     if args.model == 'normal':
         print('normal model')
-        model = get_model(num_classes=args.num_classes)
+        model = get_model(num_classes=args.num_classes,
+                          use_focal_loss=args.use_focal_loss, focal_gamma=args.focal_gamma)
     elif args.model == 'attention':
         print('attention model')
         model = get_model_attention(num_classes=args.num_classes,
-                                    attention_head_output_channels=args.num_parts)
+                                    attention_head_output_channels=args.num_parts,
+                                    use_focal_loss=args.use_focal_loss, focal_gamma=args.focal_gamma)
     elif args.model == 'attention_transformer':
         print('attention transformer model')
         model = get_model_attention(transformer=True, num_classes=args.num_classes,
-                                    attention_head_output_channels=args.num_parts)
+                                    attention_head_output_channels=args.num_parts,
+                                    use_focal_loss=args.use_focal_loss, focal_gamma=args.focal_gamma)
     else:
         raise Exception("'model' must be 'normal' or 'attention' or 'attention_transformer'")
     model.to(device)
 
     model_without_ddp = model
     if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
 
     params = [p for p in model.parameters() if p.requires_grad]

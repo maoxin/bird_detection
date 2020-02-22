@@ -2,26 +2,54 @@ import torchvision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor, FasterRCNN, resnet_fpn_backbone
 from torchvision.models.utils import load_state_dict_from_url
 
-from modeling.attention_heads import AttentionHead, AttentionHeadTransformer, FastRCNNPredictorAttention, RoIHeads
+from modeling.attention_heads import AttentionHead, AttentionHeadTransformer, FastRCNNPredictorAttention, RoIHeads, RoIHeadsN
 
-def get_model(num_classes=4, pretrained=True):
-    model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=pretrained)
-    # in_features = model.roi_heads.box_predictor.cls_score.in_features
-    # model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+import torch
+import numpy as np
+import random
+random.seed(0)
+np.random.seed(0)
+torch.manual_seed(0)
+
+def get_model(num_classes=4, pretrained=True, use_focal_loss=False, focal_gamma=2):
+    model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=False)
+    model.roi_heads = RoIHeadsN(
+        model.roi_heads.box_roi_pool, model.roi_heads.box_head,
+        model.roi_heads.box_predictor,
+        score_thresh=0.05, nms_thresh=0.5, detections_per_img=100,
+        fg_iou_thresh=0.5, bg_iou_thresh=0.5,
+        batch_size_per_image=512, positive_fraction=0.25,
+        bbox_reg_weights=None,
+        use_focal_loss=use_focal_loss,
+        focal_gamma=focal_gamma)
+
+    if pretrained:
+        state_dict = load_state_dict_from_url(model_urls['fasterrcnn_resnet50_fpn_coco'],
+                                              progress=True)
+        model.load_state_dict(state_dict, strict=False)
+    
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 
     return model
 
 
 def get_model_attention(num_classes=4, pretrained=True, transformer=False,
-    attention_head_output_channels=8):
+    attention_head_output_channels=8, use_focal_loss=False, focal_gamma=2,):
     model = fasterrcnn_resnet50_fpn_attention(pretrained=pretrained, transformer=transformer,
-        attention_head_output_channels=attention_head_output_channels)
+        attention_head_output_channels=attention_head_output_channels,
+        use_focal_loss=use_focal_loss, focal_gamma=focal_gamma,)
     
-    in_channels_two_ml_head = model.roi_heads.box_predictor.cls_score.in_features
-    in_channels_attention_head = model.roi_heads.box_head_attention.in_channels * model.roi_heads.box_head_attention.out_channels
-    model.roi_heads.box_predictor_attention = FastRCNNPredictorAttention(in_channels_two_ml_head, in_channels_attention_head, num_classes)
+    # in_channels_two_ml_head = model.roi_heads.box_predictor.cls_score.in_features
+    # in_channels_attention_head = model.roi_heads.box_head_attention.in_channels * model.roi_heads.box_head_attention.out_channels
+    # model.roi_heads.box_predictor_attention = FastRCNNPredictorAttention(in_channels_two_ml_head, in_channels_attention_head, num_classes)
 
-    model.roi_heads.box_predictor = None
+    # model.roi_heads.box_predictor = None
+
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 
     return model
 
@@ -158,11 +186,11 @@ def fasterrcnn_resnet50_fpn_attention(pretrained=False, progress=True,
     if not transformer:
         model = FasterRCNNAttention(backbone, num_classes,
                                     attention_head_output_channels=attention_head_output_channels,
-                                    use_focal_loss=focal_loss, focal_gamma=focal_gamma, **kwargs)
+                                    use_focal_loss=use_focal_loss, focal_gamma=focal_gamma, **kwargs)
     else:
         model = FasterRCNNAttentionTransformer(backbone, num_classes,
                                                attention_head_output_channels=attention_head_output_channels,
-                                               use_focal_loss=focal_loss, focal_gamma=focal_gamma, 
+                                               use_focal_loss=use_focal_loss, focal_gamma=focal_gamma, 
                                                **kwargs)
     if pretrained:
         state_dict = load_state_dict_from_url(model_urls['fasterrcnn_resnet50_fpn_coco'],
