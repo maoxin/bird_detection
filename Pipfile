@@ -7,5 +7,14 @@ verify_ssl = true
 
 [packages]
 
+requests = "*"
+ipython = "*"
+jupyter = "*"
+numpy = "*"
+pandas = "*"
+pillow = "6.1.0"
+torch = "*"
+torchvision = "*"
+
 [requires]
 python_version = "3.6"
