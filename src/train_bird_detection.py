@@ -101,18 +101,21 @@ def main(args):
     print("Creating model")
     if args.model == 'normal':
         print('normal model')
-        model = get_model(num_classes=args.num_classes,
-                          use_focal_loss=args.use_focal_loss, focal_gamma=args.focal_gamma)
+        model = get_model_attention(num_classes=args.num_classes,
+            use_focal_loss=args.use_focal_loss, focal_gamma=args.focal_gamma,
+            use_attention=False)
     elif args.model == 'attention':
         print('attention model')
         model = get_model_attention(num_classes=args.num_classes,
                                     attention_head_output_channels=args.num_parts,
-                                    use_focal_loss=args.use_focal_loss, focal_gamma=args.focal_gamma)
+                                    use_focal_loss=args.use_focal_loss, focal_gamma=args.focal_gamma,
+                                    use_attention=True)
     elif args.model == 'attention_transformer':
         print('attention transformer model')
         model = get_model_attention(transformer=True, num_classes=args.num_classes,
                                     attention_head_output_channels=args.num_parts,
-                                    use_focal_loss=args.use_focal_loss, focal_gamma=args.focal_gamma)
+                                    use_focal_loss=args.use_focal_loss, focal_gamma=args.focal_gamma,
+                                    use_attention=True)
     else:
         raise Exception("'model' must be 'normal' or 'attention' or 'attention_transformer'")
     model.to(device)
@@ -139,7 +142,7 @@ def main(args):
             args.start_epoch = checkpoint['epoch'] + 1
 
     if args.test_only:
-        evaluator = evaluate(model, data_loader_test, device=device, epoch=0, name=Path(args.output_dir).name)
+        evaluator = evaluate(model, data_loader_test, device=device, epoch=0, name=Path(args.output_dir).name, do_record=True)
         return evaluator
 
     print("Start training")
@@ -160,7 +163,11 @@ def main(args):
                 os.path.join(args.output_dir, 'model_{}.pth'.format(epoch)))
 
         # evaluate after every epoch
-        evaluate(model, data_loader_test, epoch=epoch, device=device, name=Path(args.output_dir).name)
+        if not args.no_eval:
+            do_record = False
+            if epoch == args.epochs - 1:
+                do_record = True
+            evaluate(model, data_loader_test, epoch=epoch, device=device, name=Path(args.output_dir).name, do_record=do_record)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -203,6 +210,7 @@ if __name__ == "__main__":
     parser.add_argument('--output-dir', default="/media/data1/mx_model/bird_detection/bird_detection/ex0", help='path where to save')
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--ft', action="store_true", help='fine tune')
+    parser.add_argument('--no-eval', action='store_true', help='no evaluation')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
     parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)
     parser.add_argument(

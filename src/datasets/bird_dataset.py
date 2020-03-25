@@ -70,7 +70,8 @@ class BirdDataset(Dataset):
         self.only_instance = only_instance
 
         if self.name == 'real':
-            self.dataset_path = RootDir/"bird_dataset/bird_dataset_real_cam20_Jun-Aug"
+            # self.dataset_path = RootDir/"bird_dataset/bird_dataset_real_cam20_Jun-Aug"
+            self.dataset_path = RootDir/"bird_dataset/bird_dataset_real"
         elif self.name == 'synthesized':
             self.dataset_path = RootDir/"bird_dataset/bird_dataset_synthesized"
         else:
@@ -85,8 +86,11 @@ class BirdDataset(Dataset):
         with open(self.record_path) as f:
             self.records = [json.loads(l.strip().replace("\'", "\"")) for l in f.readlines()]
 
+        if self.train and self.name != "synthesized":
+            self.records = self.records[:60]
         if self.name == 'synthesized' and self.small_set and self.train:
-            self.records = self.records[:1000]
+            # self.records = self.records[:1000]
+            self.records = self.records[:120]
 
         records = []
         for r in self.records:

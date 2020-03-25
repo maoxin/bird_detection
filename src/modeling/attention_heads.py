@@ -188,7 +188,8 @@ class BAP(nn.Module):
         raw_features = torch.nn.functional.normalize(phi_I, dim=-1) ##N*(Ca*Cf)
         pooling_features = raw_features*100
         # print(pooling_features.shape)
-        return raw_features,pooling_features
+
+        return raw_features, pooling_features
 
 class AttentionHead(nn.Module):
     def __init__(self, in_channels, out_channels, num_classes=4):
@@ -202,6 +203,9 @@ class AttentionHead(nn.Module):
         self.attention_bn = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU(inplace=True)
         self.bap = BAP()
+
+        # self.fc6 = nn.Linear(in_channels * out_channels, 1024)
+        # self.fc7 = nn.Linear(1024, 1024)
 
         self.register_buffer('ck_buffer', torch.zeros(num_classes, in_channels * out_channels))
 
@@ -222,12 +226,12 @@ class AttentionHead(nn.Module):
         return ck_loss
 
     def forward(self, x):
-        with torch.no_grad():
-            attention_map = self.relu(self.attention_bn(self.attention_conv(x)))
+        attention_map = self.relu(self.attention_bn(self.attention_conv(x)))
         # relu, so >= 0
         # (N, output_channels, H, W)
         raw_x, x = self.bap(x, attention_map)
         # (N, out_channels * in_channels)
+        # x = self.relu(self.fc7(self.relu(self.fc6(x))))
 
         return attention_map, raw_x, x
 
@@ -461,6 +465,7 @@ class RoIHeads(RoIHeadsOld):
                  keypoint_predictor=None,
                  use_focal_loss=False,
                  focal_gamma=2,
+                 use_attention=False,
                  ):
         super().__init__(box_roi_pool,
                  box_head,
@@ -481,15 +486,16 @@ class RoIHeads(RoIHeadsOld):
                  keypoint_head,
                  keypoint_predictor)
         
+        self.use_attention = use_attention
         self.use_focal_loss = use_focal_loss
         self.focal_gamma = focal_gamma
         if not use_focal_loss:
-            self.cls_loss_func = nn.CrossEntropyLoss()
+            self.cls_loss_func = FocalLoss(gamma=0)
         else:
             self.cls_loss_func = FocalLoss(gamma=focal_gamma)
-        # self.box_head_attention = box_head_attention
-        # self.box_predictor_attention = box_predictor_attention
-        # self.use_aug = False
+        self.box_head_attention = box_head_attention
+        self.box_predictor_attention = box_predictor_attention
+        self.use_aug = False
 
     def forward(self, features, proposals, image_shapes, targets=None):
         # type: (Dict[str, Tensor], List[Tensor], List[Tuple[int, int]], Optional[List[Dict[str, Tensor]]])
@@ -516,23 +522,51 @@ class RoIHeads(RoIHeadsOld):
             regression_targets = None
             matched_idxs = None
 
-        box_features = self.box_roi_pool(features, proposals, image_shapes)
-        box_features = self.box_head(box_features)
-        class_logits, box_regression = self.box_predictor(box_features)
+        box_features_0 = self.box_roi_pool(features, proposals, image_shapes)
+        box_features = self.box_head(box_features_0)
+        if not self.use_attention:
+            class_logits, box_regression = self.box_predictor(box_features)
+        else:
+            attention_map, raw_box_features_attention, box_features_attention = self.box_head_attention(box_features_0)
+            class_logits, box_regression = self.box_predictor_attention(box_features, box_features_attention)
 
         result = torch.jit.annotate(List[Dict[str, torch.Tensor]], [])
         losses = {}
         if self.training:
             assert labels is not None and regression_targets is not None
             loss_classifier, loss_box_reg = fastrcnn_loss(
-                class_logits, box_regression, labels, regression_targets,
-                cls_loss_func=self.cls_loss_func)
+                class_logits, box_regression, labels, regression_targets, self.cls_loss_func)
+            # for aug images
+            if self.use_attention and self.use_aug:
+                box_features_0_crop, box_features_0_drop = attention_crop_drop(attention_map, box_features_0)
+                _, _, box_features_attention1 = self.box_head_attention(box_features_0_crop)
+                class_logits1, box_regression1 = self.box_predictor_attention(box_features, box_features_attention1)
+                _, _, box_features_attention2 = self.box_head_attention(box_features_0_drop)
+                class_logits2, box_regression2 = self.box_predictor_attention(box_features, box_features_attention2)
+
+                loss_classifier1, _ = fastrcnn_loss(
+                    class_logits1, box_regression1, labels, regression_targets,
+                    self.cls_loss_func)
+                loss_classifier2, _ = fastrcnn_loss(
+                    class_logits2, box_regression2, labels, regression_targets,
+                    self.cls_loss_func)
+                loss_classifier = (loss_classifier + loss_classifier1 + loss_classifier2) / 3
+
             losses = {
                 "loss_classifier": loss_classifier,
-                "loss_box_reg": loss_box_reg
+                "loss_box_reg": loss_box_reg,
             }
+            if self.use_attention:
+                loss_ck = self.box_head_attention.ck_loss(raw_box_features_attention, labels)
+                losses['loss_ck'] = loss_ck
         else:
-            boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
+            if self.use_attention and self.use_aug:
+                refined_input = mask2bbox(attention_map, box_features_0)
+                _, _, box_features_attention1 = self.box_head_attention(refined_input)
+                class_logits1, _ = self.box_predictor_attention(box_features, box_features_attention1)
+                boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes, class_logits1)    
+            else:
+                boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
             num_images = len(boxes)
             for i in range(num_images):
                 result.append(
@@ -634,238 +668,68 @@ class RoIHeads(RoIHeadsOld):
             losses.update(loss_keypoint)
 
         return result, losses
+    def postprocess_detections(self, class_logits, box_regression, proposals, image_shapes, class_logits1=None):
+        # type: (Tensor, Tensor, List[Tensor], List[Tuple[int, int]])
+        device = class_logits.device
+        num_classes = class_logits.shape[-1]
 
-    # def forward(self, features, proposals, image_shapes, targets=None):
-    #     # type: (Dict[str, Tensor], List[Tensor], List[Tuple[int, int]], Optional[List[Dict[str, Tensor]]])
-    #     """
-    #     Arguments:
-    #         features (List[Tensor])
-    #         proposals (List[Tensor[N, 4]])
-    #         image_shapes (List[Tuple[H, W]])
-    #         targets (List[Dict])
-    #     """
-    #     if targets is not None:
-    #         for t in targets:
-    #             # TODO: https://github.com/pytorch/pytorch/issues/26731
-    #             floating_point_types = (torch.float, torch.double, torch.half)
-    #             assert t["boxes"].dtype in floating_point_types, 'target boxes must of float type'
-    #             assert t["labels"].dtype == torch.int64, 'target labels must of int64 type'
-    #             if self.has_keypoint():
-    #                 assert t["keypoints"].dtype == torch.float32, 'target keypoints must of float type'
+        boxes_per_image = [len(boxes_in_image) for boxes_in_image in proposals]
+        pred_boxes = self.box_coder.decode(box_regression, proposals)
 
-    #     if self.training:
-    #         proposals, matched_idxs, labels, regression_targets = self.select_training_samples(proposals, targets)
-    #     else:
-    #         labels = None
-    #         regression_targets = None
-    #         matched_idxs = None
+        if class_logits1 is None:
+            pred_scores = F.softmax(class_logits, -1)
+        else:
+            pred_scores = (F.softmax(class_logits, dim=-1) + F.softmax(class_logits1, dim=-1)) / 2
 
-    #     box_features_0 = self.box_roi_pool(features, proposals, image_shapes)
-    #     box_features = self.box_head(box_features_0)
-    #     class_logits, box_regression = self.box_predictor(box_features)
-    #     # box_features = self.box_head(box_features_0)
-    #     # attention_map, raw_box_features_attention, box_features_attention = self.box_head_attention(box_features_0)
-    #     # class_logits, box_regression = self.box_predictor_attention(box_features, box_features_attention)
+        # split boxes and scores per image
+        if len(boxes_per_image) == 1:
+            # TODO : remove this when ONNX support dynamic split sizes
+            # and just assign to pred_boxes instead of pred_boxes_list
+            pred_boxes_list = [pred_boxes]
+            pred_scores_list = [pred_scores]
+        else:
+            pred_boxes_list = pred_boxes.split(boxes_per_image, 0)
+            pred_scores_list = pred_scores.split(boxes_per_image, 0)
 
-    #     result = torch.jit.annotate(List[Dict[str, torch.Tensor]], [])
-    #     losses = {}
-    #     if self.training:
-    #         assert labels is not None and regression_targets is not None
-    #         loss_classifier, loss_box_reg = fastrcnn_loss(
-    #             class_logits, box_regression, labels, regression_targets, self.cls_loss_func)
-    #         # for aug images
-    #         if self.use_aug:
-    #             box_features_0_crop, box_features_0_drop = attention_crop_drop(attention_map, box_features_0)
-    #             _, _, box_features_attention1 = self.box_head_attention(box_features_0_crop)
-    #             class_logits1, box_regression1 = self.box_predictor_attention(box_features, box_features_attention1)
-    #             _, _, box_features_attention2 = self.box_head_attention(box_features_0_drop)
-    #             class_logits2, box_regression2 = self.box_predictor_attention(box_features, box_features_attention2)
+        all_boxes = []
+        all_scores = []
+        all_labels = []
+        for boxes, scores, image_shape in zip(pred_boxes_list, pred_scores_list, image_shapes):
+            boxes = box_ops.clip_boxes_to_image(boxes, image_shape)
 
-    #             loss_classifier1, _ = fastrcnn_loss(
-    #                 class_logits1, box_regression1, labels, regression_targets,
-    #                 self.cls_loss_func)
-    #             loss_classifier2, _ = fastrcnn_loss(
-    #                 class_logits2, box_regression2, labels, regression_targets,
-    #                 self.cls_loss_func)
-    #             loss_classifier = (loss_classifier + loss_classifier1 + loss_classifier2) / 3
+            # create labels for each prediction
+            labels = torch.arange(num_classes, device=device)
+            labels = labels.view(1, -1).expand_as(scores)
 
-    #         # loss_ck = self.box_head_attention.ck_loss(raw_box_features_attention, labels)
-    #         losses = {
-    #             "loss_classifier": loss_classifier,
-    #             "loss_box_reg": loss_box_reg,
-    #             # "loss_ck": loss_ck,
-    #         }
-    #     else:
-    #         if self.use_aug:
-    #             refined_input = mask2bbox(attention_map, box_features_0)
-    #             _, _, box_features_attention1 = self.box_head_attention(refined_input)
-    #             class_logits1, _ = self.box_predictor_attention(box_features, box_features_attention1)
-    #             boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes, class_logits1)    
-    #         else:
-    #             boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
-    #         num_images = len(boxes)
-    #         for i in range(num_images):
-    #             result.append(
-    #                 {
-    #                     "boxes": boxes[i],
-    #                     "labels": labels[i],
-    #                     "scores": scores[i],
-    #                 }
-    #             )
+            # remove predictions with the background label
+            boxes = boxes[:, 1:]
+            scores = scores[:, 1:]
+            labels = labels[:, 1:]
 
-    #     if self.has_mask():
-    #         mask_proposals = [p["boxes"] for p in result]
-    #         if self.training:
-    #             assert matched_idxs is not None
-    #             # during training, only focus on positive boxes
-    #             num_images = len(proposals)
-    #             mask_proposals = []
-    #             pos_matched_idxs = []
-    #             for img_id in range(num_images):
-    #                 pos = torch.nonzero(labels[img_id] > 0).squeeze(1)
-    #                 mask_proposals.append(proposals[img_id][pos])
-    #                 pos_matched_idxs.append(matched_idxs[img_id][pos])
-    #         else:
-    #             pos_matched_idxs = None
+            # batch everything, by making every class prediction be a separate instance
+            boxes = boxes.reshape(-1, 4)
+            scores = scores.reshape(-1)
+            labels = labels.reshape(-1)
 
-    #         if self.mask_roi_pool is not None:
-    #             mask_features = self.mask_roi_pool(features, mask_proposals, image_shapes)
-    #             mask_features = self.mask_head(mask_features)
-    #             mask_logits = self.mask_predictor(mask_features)
-    #         else:
-    #             mask_logits = torch.tensor(0)
-    #             raise Exception("Expected mask_roi_pool to be not None")
+            # remove low scoring boxes
+            inds = torch.nonzero(scores > self.score_thresh).squeeze(1)
+            boxes, scores, labels = boxes[inds], scores[inds], labels[inds]
 
-    #         loss_mask = {}
-    #         if self.training:
-    #             assert targets is not None
-    #             assert pos_matched_idxs is not None
-    #             assert mask_logits is not None
+            # remove empty boxes
+            keep = box_ops.remove_small_boxes(boxes, min_size=1e-2)
+            boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
 
-    #             gt_masks = [t["masks"] for t in targets]
-    #             gt_labels = [t["labels"] for t in targets]
-    #             rcnn_loss_mask = maskrcnn_loss(
-    #                 mask_logits, mask_proposals,
-    #                 gt_masks, gt_labels, pos_matched_idxs)
-    #             loss_mask = {
-    #                 "loss_mask": rcnn_loss_mask
-    #             }
-    #         else:
-    #             labels = [r["labels"] for r in result]
-    #             masks_probs = maskrcnn_inference(mask_logits, labels)
-    #             for mask_prob, r in zip(masks_probs, result):
-    #                 r["masks"] = mask_prob
+            # non-maximum suppression, independently done per class
+            keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh)
+            # keep only topk scoring predictions
+            keep = keep[:self.detections_per_img]
+            boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
 
-    #         losses.update(loss_mask)
+            all_boxes.append(boxes)
+            all_scores.append(scores)
+            all_labels.append(labels)
 
-    #     # keep none checks in if conditional so torchscript will conditionally
-    #     # compile each branch
-    #     if self.keypoint_roi_pool is not None and self.keypoint_head is not None \
-    #             and self.keypoint_predictor is not None:
-    #         keypoint_proposals = [p["boxes"] for p in result]
-    #         if self.training:
-    #             # during training, only focus on positive boxes
-    #             num_images = len(proposals)
-    #             keypoint_proposals = []
-    #             pos_matched_idxs = []
-    #             assert matched_idxs is not None
-    #             for img_id in range(num_images):
-    #                 pos = torch.nonzero(labels[img_id] > 0).squeeze(1)
-    #                 keypoint_proposals.append(proposals[img_id][pos])
-    #                 pos_matched_idxs.append(matched_idxs[img_id][pos])
-    #         else:
-    #             pos_matched_idxs = None
-
-    #         keypoint_features = self.keypoint_roi_pool(features, keypoint_proposals, image_shapes)
-    #         keypoint_features = self.keypoint_head(keypoint_features)
-    #         keypoint_logits = self.keypoint_predictor(keypoint_features)
-
-    #         loss_keypoint = {}
-    #         if self.training:
-    #             assert targets is not None
-    #             assert pos_matched_idxs is not None
-
-    #             gt_keypoints = [t["keypoints"] for t in targets]
-    #             rcnn_loss_keypoint = keypointrcnn_loss(
-    #                 keypoint_logits, keypoint_proposals,
-    #                 gt_keypoints, pos_matched_idxs)
-    #             loss_keypoint = {
-    #                 "loss_keypoint": rcnn_loss_keypoint
-    #             }
-    #         else:
-    #             assert keypoint_logits is not None
-    #             assert keypoint_proposals is not None
-
-    #             keypoints_probs, kp_scores = keypointrcnn_inference(keypoint_logits, keypoint_proposals)
-    #             for keypoint_prob, kps, r in zip(keypoints_probs, kp_scores, result):
-    #                 r["keypoints"] = keypoint_prob
-    #                 r["keypoints_scores"] = kps
-
-    #         losses.update(loss_keypoint)
-
-    #     return result, losses
-    # def postprocess_detections(self, class_logits, box_regression, proposals, image_shapes, class_logits1=None):
-    #     # type: (Tensor, Tensor, List[Tensor], List[Tuple[int, int]])
-    #     device = class_logits.device
-    #     num_classes = class_logits.shape[-1]
-
-    #     boxes_per_image = [len(boxes_in_image) for boxes_in_image in proposals]
-    #     pred_boxes = self.box_coder.decode(box_regression, proposals)
-
-    #     if class_logits1 is None:
-    #         pred_scores = F.softmax(class_logits, -1)
-    #     else:
-    #         pred_scores = (F.softmax(class_logits, dim=-1) + F.softmax(class_logits1, dim=-1)) / 2
-
-    #     # split boxes and scores per image
-    #     if len(boxes_per_image) == 1:
-    #         # TODO : remove this when ONNX support dynamic split sizes
-    #         # and just assign to pred_boxes instead of pred_boxes_list
-    #         pred_boxes_list = [pred_boxes]
-    #         pred_scores_list = [pred_scores]
-    #     else:
-    #         pred_boxes_list = pred_boxes.split(boxes_per_image, 0)
-    #         pred_scores_list = pred_scores.split(boxes_per_image, 0)
-
-    #     all_boxes = []
-    #     all_scores = []
-    #     all_labels = []
-    #     for boxes, scores, image_shape in zip(pred_boxes_list, pred_scores_list, image_shapes):
-    #         boxes = box_ops.clip_boxes_to_image(boxes, image_shape)
-
-    #         # create labels for each prediction
-    #         labels = torch.arange(num_classes, device=device)
-    #         labels = labels.view(1, -1).expand_as(scores)
-
-    #         # remove predictions with the background label
-    #         boxes = boxes[:, 1:]
-    #         scores = scores[:, 1:]
-    #         labels = labels[:, 1:]
-
-    #         # batch everything, by making every class prediction be a separate instance
-    #         boxes = boxes.reshape(-1, 4)
-    #         scores = scores.reshape(-1)
-    #         labels = labels.reshape(-1)
-
-    #         # remove low scoring boxes
-    #         inds = torch.nonzero(scores > self.score_thresh).squeeze(1)
-    #         boxes, scores, labels = boxes[inds], scores[inds], labels[inds]
-
-    #         # remove empty boxes
-    #         keep = box_ops.remove_small_boxes(boxes, min_size=1e-2)
-    #         boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
-
-    #         # non-maximum suppression, independently done per class
-    #         keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh)
-    #         # keep only topk scoring predictions
-    #         keep = keep[:self.detections_per_img]
-    #         boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
-
-    #         all_boxes.append(boxes)
-    #         all_scores.append(scores)
-    #         all_labels.append(labels)
-
-    #     return all_boxes, all_scores, all_labels
+        return all_boxes, all_scores, all_labels
         
 class FastRCNNPredictorAttention(nn.Module):
     """

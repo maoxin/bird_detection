@@ -1,5 +1,5 @@
 import torchvision
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor, FasterRCNN, resnet_fpn_backbone
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor, FasterRCNN, resnet_fpn_backbone, TwoMLPHead
 from torchvision.models.utils import load_state_dict_from_url
 
 from modeling.attention_heads import AttentionHead, AttentionHeadTransformer, FastRCNNPredictorAttention, RoIHeads, RoIHeadsN
@@ -36,20 +36,17 @@ def get_model(num_classes=4, pretrained=True, use_focal_loss=False, focal_gamma=
 
 
 def get_model_attention(num_classes=4, pretrained=True, transformer=False,
-    attention_head_output_channels=8, use_focal_loss=False, focal_gamma=2,):
+    attention_head_output_channels=8, use_focal_loss=False, focal_gamma=2,
+    use_attention=False):
     model = fasterrcnn_resnet50_fpn_attention(pretrained=pretrained, transformer=transformer,
         attention_head_output_channels=attention_head_output_channels,
-        use_focal_loss=use_focal_loss, focal_gamma=focal_gamma,)
+        use_focal_loss=use_focal_loss, focal_gamma=focal_gamma, use_attention=use_attention)
     
-    # in_channels_two_ml_head = model.roi_heads.box_predictor.cls_score.in_features
-    # in_channels_attention_head = model.roi_heads.box_head_attention.in_channels * model.roi_heads.box_head_attention.out_channels
-    # model.roi_heads.box_predictor_attention = FastRCNNPredictorAttention(in_channels_two_ml_head, in_channels_attention_head, num_classes)
-
-    # model.roi_heads.box_predictor = None
-
-    in_features = model.roi_heads.box_predictor.cls_score.in_features
-
-    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+    # model.roi_heads.box_head = TwoMLPHead(12544, 1024)
+    in_channels_two_ml_head = model.roi_heads.box_predictor.cls_score.in_features
+    in_channels_attention_head = model.roi_heads.box_head_attention.in_channels * model.roi_heads.box_head_attention.out_channels
+    # in_channels_attention_head = in_channels_two_ml_head
+    model.roi_heads.box_predictor_attention = FastRCNNPredictorAttention(in_channels_two_ml_head, in_channels_attention_head, num_classes)
 
     return model
 
@@ -73,7 +70,8 @@ class FasterRCNNAttention(FasterRCNN):
                  bbox_reg_weights=None,
                  attention_head_output_channels=8,
                  use_focal_loss=False,
-                 focal_gamma=2):
+                 focal_gamma=2,
+                 use_attention=False):
         super().__init__(backbone, num_classes=num_classes,
                  # transform parameters
                  min_size=min_size, max_size=max_size,
@@ -97,6 +95,7 @@ class FasterRCNNAttention(FasterRCNN):
         
         in_channels_two_ml_head = self.roi_heads.box_predictor.cls_score.in_features
         in_channels_attention_head = box_head_attention.in_channels * box_head_attention.out_channels
+        # in_channels_attention_head = in_channels_two_ml_head
         box_predictor_attention = FastRCNNPredictorAttention(in_channels_two_ml_head, in_channels_attention_head, num_classes)
 
         self.roi_heads = RoIHeads(
@@ -108,7 +107,8 @@ class FasterRCNNAttention(FasterRCNN):
             bbox_reg_weights,
             box_score_thresh, box_nms_thresh, box_detections_per_img,
             use_focal_loss=use_focal_loss,
-            focal_gamma=focal_gamma)
+            focal_gamma=focal_gamma,
+            use_attention=use_attention)
 
 class FasterRCNNAttentionTransformer(FasterRCNN):
     def __init__(self, backbone, num_classes=None,
@@ -177,16 +177,18 @@ def fasterrcnn_resnet50_fpn_attention(pretrained=False, progress=True,
                                       num_classes=91, pretrained_backbone=True,
                                       attention_head_output_channels=8,
                                       transformer=False,
-                                      use_focal_loss=False, focal_gamma=2,
+                                      use_focal_loss=False, focal_gamma=2, use_attention=False,
                                       **kwargs):
     if pretrained:
         # no need to download the backbone if pretrained is set
         pretrained_backbone = False
     backbone = resnet_fpn_backbone('resnet50', pretrained_backbone)
+    # backbone = resnet_fpn_backbone('resnet50', False)
     if not transformer:
         model = FasterRCNNAttention(backbone, num_classes,
                                     attention_head_output_channels=attention_head_output_channels,
-                                    use_focal_loss=use_focal_loss, focal_gamma=focal_gamma, **kwargs)
+                                    use_focal_loss=use_focal_loss, focal_gamma=focal_gamma,
+                                    use_attention=use_attention, **kwargs)
     else:
         model = FasterRCNNAttentionTransformer(backbone, num_classes,
                                                attention_head_output_channels=attention_head_output_channels,

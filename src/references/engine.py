@@ -2,6 +2,7 @@ import math
 import sys
 import time
 import torch
+from pathlib import Path
 
 import torchvision.models.detection.mask_rcnn
 import numpy as np
@@ -76,7 +77,7 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, na
         model_without_ddp = model
         if isinstance(model, torch.nn.parallel.DistributedDataParallel):
             model_without_ddp = model.module
-        if epoch <= 0:
+        if epoch <= 1:
             model_without_ddp.roi_heads.use_aug = False
         else:
             model_without_ddp.roi_heads.use_aug = True
@@ -158,7 +159,9 @@ def get_coco_eval_bbox(coco_evaluator, ap=1, iouThr=None, catIds=None, areaRng='
     return mean_s
 
 @torch.no_grad()
-def evaluate(model, data_loader, device, epoch, name='ex0'):
+def evaluate(model, data_loader, device, epoch, name='ex0', do_record=False):
+    record_path = Path("/media/data1/mx_log")/f"bird_detection_records/{name}"
+
     n_threads = torch.get_num_threads()
     # FIXME remove this and make paste_masks_in_image run on the GPU
     torch.set_num_threads(1)
@@ -214,6 +217,10 @@ def evaluate(model, data_loader, device, epoch, name='ex0'):
 
             if catIds is None:
                 catIds = 'all'
+                if do_record and utils.get_rank() == 0:
+                    print("RECORD!!!!!")
+                    with record_path.open("a") as f:
+                        f.write(f"{p0}, {p1}, {p2}\n")
             metric_logger.tb_writer.add_scalar(f"val/ap_05_95_c{catIds}_aall_m100", p0, epoch)
             metric_logger.tb_writer.add_scalar(f"val/ap_05_c{catIds}_aall_m100", p1, epoch)
             metric_logger.tb_writer.add_scalar(f"val/ap_75_c{catIds}_aall_m100", p2, epoch)
