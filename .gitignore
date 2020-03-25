@@ -1,5 +1,6 @@
 .vscode
 coco
+cocoapi
 *.png
 .idea
 src/.ipynb_checkpoints
